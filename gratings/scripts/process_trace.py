@@ -4,7 +4,7 @@ import matplotlib
 matplotlib.use('Agg')
 import seaborn as sns; sns.set()
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+import matplotlib
 
 import sys
 import shutil
@@ -21,17 +21,10 @@ import pprint
 import scipy.stats as stats
 pp = pprint.PrettyPrinter(indent=4)
 sys.path.append('/n/coxfs01/cechavarria/repos/2p-pipeline/')
+from pipeline.python.paradigm import align_acquisition_events as acq
+from pipeline.python.traces.utils import get_frame_info
+from pipeline.python.paradigm import utils as util
 from pipeline.python.utils import natural_keys, replace_root, print_elapsed_time
-
-def get_trial_stat(base,stim):
-    #get KS signed tstat and pvl
-    
-    diff_sign = np.sign(np.mean(stim)-np.mean(base))
-    stat,pval = stats.ks_2samp(base,stim)
-    stat = diff_sign*stat
-    pval = diff_sign*pval
-    
-    return stat,pval
 
 def get_comma_separated_args(option, opt, value, parser):
   setattr(parser.values, option.dest, value.split(','))
@@ -53,116 +46,6 @@ def load_TID(run_dir, trace_id, auto=False):
     pp.pprint(TID)
     return TID
 
-def plot_motion(opts):
-    traceid = '%s_s2p'%(opts.traceid)
-    #hard-coding some parameters
-    iti_pre = 1.0
-    iti_post = 1.95
-
-    trials_per_file = 25
-
-    acquisition_dir = os.path.join(opts.rootdir, opts.animalid, opts.session, opts.acquisition)
-
-
-    fig_dir = os.path.join(opts.rootdir, opts.animalid, opts.session,'motion_figures')
-    if not os.path.isdir(fig_dir):
-        os.makedirs(fig_dir)
-
-    for run in opts.run_list:
-        print(run)
-
-        traceid_dir = os.path.join(acquisition_dir, run, 'traces',traceid)
-
-        trace_arrays_dir = os.path.join(traceid_dir,'files')
-      
-        # Get SCAN IMAGE info for run:
-        run_dir = traceid_dir.split('/traces')[0]
-        run = os.path.split(run_dir)[-1]
-        with open(os.path.join(run_dir, '%s.json' % run), 'r') as fr:
-            scan_info = json.load(fr)
-        all_frames_tsecs = np.array(scan_info['frame_tstamps_sec'])
-        nslices_full = len(all_frames_tsecs) / scan_info['nvolumes']
-        nslices = len(scan_info['slices'])
-        if scan_info['nchannels']==2:
-            all_frames_tsecs = np.array(all_frames_tsecs[0::2])
-
-
-        print("N tsecs:", len(all_frames_tsecs))
-        framerate = scan_info['frame_rate']
-        volumerate = scan_info['volume_rate']
-        nvolumes = scan_info['nvolumes']
-        nfiles = scan_info['ntiffs']
-
-
-
-
-
-        # Load MW info to get stimulus details:
-        paradigm_dir = os.path.join(acquisition_dir, run, 'paradigm')
-        mw_fpath = [os.path.join(paradigm_dir, m) for m in os.listdir(paradigm_dir) if 'trials_' in m and m.endswith('json')][0]
-        with open(mw_fpath,'r') as m:
-            mwinfo = json.load(m)
-        pre_iti_sec = round(mwinfo[list(mwinfo.keys())[0]]['iti_dur_ms']/1E3) 
-        nframes_iti_full = int(round(pre_iti_sec * volumerate))
-
-
-        trial_list = sorted(mwinfo.keys(), key=natural_keys)
-
-
-
-        trace_files = [f for f in os.listdir(trace_arrays_dir) if 'File' in f and f.endswith('hdf5')]
-
-
-        #file_idx = 0
-        #trace_file = trace_files[0]
-        for file_idx,trace_file in enumerate(trace_files):
-            trace_fn = os.path.join(trace_arrays_dir,trace_file)
-
-            rawfile = h5py.File(trace_fn, 'r')
-            motion =  np.array(rawfile.attrs['motion_offset'])
-            min_motion =  int(rawfile.attrs['min_motion_offset'])
-            max_motion =  int(rawfile.attrs['max_motion_offset'])
-
-            stim_on_frames = []
-
-            for tridx in range(trials_per_file):
-                tridx_all = tridx+(trials_per_file*file_idx)
-                trial_key = 'trial%05d' % (tridx_all+1)
-                stim_on_frames.append(mwinfo[trial_key]['frame_stim_on'])
-            stim_on_frames = np.array(stim_on_frames)-(nvolumes*file_idx)
-
-            #open stimulus condition file
-            stimconfig_fn = 'trial_conditions.hdf5'
-            paradigm_dir = os.path.join(acquisition_dir, run, 'paradigm')
-            stimconfig_filepath = os.path.join(paradigm_dir, 'files', stimconfig_fn)
-            run_config_grp = h5py.File(stimconfig_filepath, 'r')
-
-            trial_config = np.array(run_config_grp['trial_config']).astype('int')
-            trial_img = np.array(run_config_grp['trial_img']).astype('int')
-            trial_cond = np.array(run_config_grp['trial_cond']).astype('int')
-
-            palette=["#4c72b0","#c44e52","#55a868"]
-
-            fig=plt.figure(figsize = (30, 5))
-
-
-            plt.plot(all_frames_tsecs,motion)
-            plt.axhline(y = 5, xmin = 0, xmax = 1, linewidth=1, color='k',linestyle ='--')
-            plt.axhline(y = 0, xmin = 0, xmax = 1, linewidth=1, color='k',linestyle ='-')
-            axes = plt.gca()
-            axes.set_ylim([min_motion,max_motion])
-            ymin, ymax = axes.get_ylim()
-            for fidx,f in enumerate(all_frames_tsecs[stim_on_frames]):
-                axes.add_patch(patches.Rectangle((f, ymin), 1, ymax-ymin, linewidth=0, fill=True, color=palette[trial_cond[fidx+(file_idx*trials_per_file)]], alpha=0.4));
-                axes.text(f,ymax,'%i'%(trial_img[fidx+(file_idx*trials_per_file)]),fontsize=12);
-
-            plt.xlabel('Time (secs)',fontsize = 14)
-            plt.ylabel('Df/F',fontsize = 14)
-            fig.suptitle('Motion')
-            
-            fig_fn = 'motion_timecourse_%s_file%03d.png'%(run,file_idx+1)
-            plt.savefig(os.path.join(fig_dir,fig_fn))
-            plt.close()
 
 def parse_trials(opts):
     #hard-coding some parameters
@@ -170,7 +53,7 @@ def parse_trials(opts):
     combined = False
     iti_pre = 1.0
     iti_post = 1.50
-    stim_dur = 1.0
+    stim_dur = 2.0
 
 
     for run_count,run in enumerate(opts.run_list):
@@ -259,17 +142,12 @@ def parse_trials(opts):
                     trace_fn = os.path.join(trace_arrays_dir,trace_file)
 
                     rawfile = h5py.File(trace_fn, 'r')
-                    motion_offset = np.array(rawfile.attrs['motion_offset'])
 
 
-                    raw_df = rawfile[curr_slice]['traces']['pixel_value']['raw'][:]
-                    sub_df = rawfile[curr_slice]['traces']['pixel_value']['cell'][:]
-                    np_df = rawfile[curr_slice]['traces']['pixel_value']['neuropil'][:]
+                    raw_df = rawfile[curr_slice]['traces']['raw'][:]
+                    sub_df = rawfile[curr_slice]['traces']['np_subtracted'][:]
+                    np_df = rawfile[curr_slice]['traces']['neuropil'][:]
 
-                    df_f =rawfile[curr_slice]['traces']['global_df_f']['cell'][:]
-                    spks =rawfile[curr_slice]['traces']['spks']['cell'][:]
-
-                    print(run_count,fid)
                     mean_pix_fid[fid,:] = np.squeeze(np.mean(np.squeeze(np.mean(sub_df,0)),0))
             else:
                 #load file
@@ -277,29 +155,11 @@ def parse_trials(opts):
                 trace_fn = os.path.join(trace_arrays_dir,trace_file)
 
                 rawfile = h5py.File(trace_fn, 'r')
-                
-                motion_offset = np.array(rawfile.attrs['motion_offset'])
-                raw_df = rawfile[curr_slice]['traces']['pixel_value']['raw'][:]
-                sub_df = rawfile[curr_slice]['traces']['pixel_value']['cell'][:]
-                np_df = rawfile[curr_slice]['traces']['pixel_value']['neuropil'][:]
-
-                df_f =rawfile[curr_slice]['traces']['global_df_f']['cell'][:]
-                spks =rawfile[curr_slice]['traces']['spks']['cell'][:]
-
-
-                #copy some attributes
-                file_grp.attrs['s2p_cell_rois'] = rawfile.attrs['s2p_cell_rois']
-                file_grp.attrs['roi_center_x'] = rawfile.attrs['roi_center_x']
-                file_grp.attrs['roi_center_y'] = rawfile.attrs['roi_center_y']
-                file_grp.attrs['roi_compact'] = rawfile.attrs['roi_compact']
-                file_grp.attrs['roi_skew'] = rawfile.attrs['roi_skew']
-                file_grp.attrs['roi_aspect_ratio'] = rawfile.attrs['roi_aspect_ratio']
-                file_grp.attrs['roi_radius'] = rawfile.attrs['roi_radius']
-                file_grp.attrs['roi_footprint'] = rawfile.attrs['roi_footprint']
-                file_grp.attrs['roi_npix'] = rawfile.attrs['roi_npix']
-
-
-
+                if 's2p_cell_rois' in rawfile.attrs.keys():
+                        file_grp.attrs['s2p_cell_rois'] = rawfile.attrs['s2p_cell_rois']
+                raw_df = rawfile[curr_slice]['traces']['raw'][:]
+                sub_df = rawfile[curr_slice]['traces']['np_subtracted'][:]
+                np_df = rawfile[curr_slice]['traces']['neuropil'][:]
 
                 #get dimension sizes for arrays
                 ntrials = len(mwinfo)
@@ -324,14 +184,6 @@ def parse_trials(opts):
                 parsed_traces_sub[:] = np.nan
                 parsed_traces_np = np.empty((ntrials,ntpts,nrois))
                 parsed_traces_np[:] = np.nan
-                parsed_motion = np.empty((ntrials,ntpts))
-                parsed_motion[:] = np.nan
-
-                parsed_traces_df_f = np.empty((ntrials,ntpts,nrois))
-                parsed_traces_df_f[:] = np.nan
-
-                parsed_traces_spks = np.empty((ntrials,ntpts,nrois))
-                parsed_traces_spks[:] = np.nan
 
 
             idx0 = (mwinfo[trial_key]['frame_stim_on']-pre_frames)-(nvolumes*fid)
@@ -346,17 +198,10 @@ def parse_trials(opts):
             trial_df_raw = raw_df[idx0:idx1,:]
             trial_df_sub = sub_df[idx0:idx1,:]
             trial_df_np = np_df[idx0:idx1,:]
-            trial_df_f = df_f[idx0:idx1,:]
-            trial_spks = spks[idx0:idx1,:]
 
             parsed_traces_raw[trial_idx,0:trial_frames,:]=trial_df_raw
             parsed_traces_sub[trial_idx,0:trial_frames,:]=trial_df_sub
             parsed_traces_np[trial_idx,0:trial_frames,:]=trial_df_np
-            parsed_traces_df_f[trial_idx,0:trial_frames,:]=trial_df_f
-            parsed_traces_spks[trial_idx,0:trial_frames,:]=trial_spks
-
-
-            parsed_motion[trial_idx,0:trial_frames] = motion_offset[idx0:idx1]
             trial_fid[trial_idx] = fid
 
         #get parsed trace time stamps
@@ -366,8 +211,6 @@ def parse_trials(opts):
         curr_tstamps = curr_tstamps - iti_pre
 
         #save arrays to file
-        motion = file_grp.create_dataset('trial_motion', parsed_motion.shape, parsed_motion.dtype)
-        motion[...] = parsed_motion
 
         fset = file_grp.create_dataset('/'.join([curr_slice, 'frames_tsec']), curr_tstamps.shape, curr_tstamps.dtype)
         fset[...] = curr_tstamps
@@ -383,29 +226,22 @@ def parse_trials(opts):
 
 
 
-        raw_parsed = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'pixel_value', 'raw']), parsed_traces_raw.shape, parsed_traces_raw.dtype)
+        raw_parsed = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'raw']), parsed_traces_raw.shape, parsed_traces_raw.dtype)
         raw_parsed[...] = parsed_traces_raw
 
-        sub_parsed = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'pixel_value','cell']), parsed_traces_sub.shape, parsed_traces_sub.dtype)
+        sub_parsed = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'np_subtracted']), parsed_traces_sub.shape, parsed_traces_sub.dtype)
         sub_parsed[...] = parsed_traces_sub
 
-        np_parsed = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'pixel_value','neuropil']), parsed_traces_np.shape, parsed_traces_np.dtype)
+        np_parsed = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'neuropil']), parsed_traces_np.shape, parsed_traces_np.dtype)
         np_parsed[...] = parsed_traces_np
 
-        df_f_parsed = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'global_df_f', 'cell']), parsed_traces_df_f.shape, parsed_traces_df_f.dtype)
-        df_f_parsed[...] = parsed_traces_df_f
-
-        spks_parsed = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'spks', 'cell']), parsed_traces_spks.shape, parsed_traces_spks.dtype)
-        spks_parsed[...] = parsed_traces_spks
-
         file_grp.close()
-
-
 
         print('Done Parsing Traces!')
         print('Saved all info to: %s'%(parsedtraces_filepath))
 
         #open stimulus condition file
+        paradigm_dir = os.path.join(acquisition_dir, run, 'paradigm_s2p')#dummy folder to avoid overwriting 
         stimconfig_fn = 'trial_conditions.hdf5'
         stimconfig_filepath = os.path.join(paradigm_dir, 'files', stimconfig_fn)
         file_grp = h5py.File(stimconfig_filepath, 'w')
@@ -413,49 +249,22 @@ def parse_trials(opts):
 
         #get stimulus conidtion info for each trial
         trial_list = sorted(mwinfo.keys(), key=natural_keys)
-        trial_img = np.zeros((len(trial_list),))
         trial_cond = np.zeros((len(trial_list),))
 
         for trial_idx, trial_key in enumerate(trial_list):
         # trial_key = trial_list[0]
         # trial_idx = 0
 
-            stim_name = mwinfo[trial_key]['stimuli']['stimulus']
+             trial_cond[trial_idx] = mwinfo[trial_key]['stimuli']['rotation']/45
 
-            if 'mag' in stim_name:
-                trial_cond[trial_idx] = 2
-            elif 'tex' in stim_name:
-                trial_cond[trial_idx] = 1
-
-            #get image name
-            i1 = findOccurrences(stim_name,'.')[-1]
-            i0 = findOccurrences(stim_name,'_')[-1]
-
-            trial_img[trial_idx] = int(stim_name[i0+1:i1])
-        print np.unique(trial_img)
-        new_img_array = np.zeros(trial_img.shape)
-        for img_idx, img_id in enumerate(np.unique(trial_img)):
-            new_img_array[np.where(trial_img == img_id)[0]]=img_idx
-        trial_img = new_img_array
-
-        config_count = 0
-        trial_config = np.zeros(len(trial_list),)
-        for img_id in np.unique(trial_img):
-            for cond in np.unique(trial_cond):
-                found_idx = np.intersect1d(np.where(trial_cond==cond)[0],np.where(trial_img==img_id)[0])
-                trial_config[found_idx]=config_count
-                config_count = config_count+1
-
+        trial_config = trial_cond
 
         #save arrays to file
-        imgset = file_grp.create_dataset('trial_img', trial_img.shape, trial_img.dtype)
-        imgset[...] = trial_img
 
         configset = file_grp.create_dataset('trial_config', trial_config.shape, trial_config.dtype)
         configset[...] = trial_config
 
         condset = file_grp.create_dataset('trial_cond', trial_cond.shape, trial_cond.dtype)
-
         condset[...] = trial_cond
 
         file_grp.close()
@@ -508,14 +317,10 @@ def combine_trials(opts):
         trial_fid = np.array(file_grp['Slice01']['trial_fid'])
         trial_run = np.ones(trial_fid.shape)*(run_idx+1)
         mean_pix_fid = np.array(file_grp['Slice01']['mean_pix_fid'])
-        #get motion
-        motion_run = np.array(file_grp['trial_motion'])
         #get raw pixel value arrays
-        pix_raw_run = np.array(file_grp[curr_slice]['traces']['pixel_value']['raw'])
-        pix_cell_run = np.array(file_grp[curr_slice]['traces']['pixel_value']['cell'])
-        pix_np_run = np.array(file_grp[curr_slice]['traces']['pixel_value']['neuropil'])
-        df_f_cell_run = np.array(file_grp[curr_slice]['traces']['global_df_f']['cell'])
-        spks_cell_run = np.array(file_grp[curr_slice]['traces']['spks']['cell'])
+        pix_raw_run = np.array(file_grp[curr_slice]['traces']['raw'])
+        pix_cell_run = np.array(file_grp[curr_slice]['traces']['np_subtracted'])
+        pix_np_run = np.array(file_grp[curr_slice]['traces']['neuropil'])
 
         print(pix_raw_run.shape)
 
@@ -544,26 +349,15 @@ def combine_trials(opts):
             
             
             
-            #copy some attributes
-            combined_grp.attrs['s2p_cell_rois'] = file_grp.attrs['s2p_cell_rois']
-            combined_grp.attrs['roi_center_x'] = file_grp.attrs['roi_center_x']
-            combined_grp.attrs['roi_center_y'] = file_grp.attrs['roi_center_y']
-            combined_grp.attrs['roi_compact'] = file_grp.attrs['roi_compact']
-            combined_grp.attrs['roi_skew'] = file_grp.attrs['roi_skew']
-            combined_grp.attrs['roi_aspect_ratio'] = file_grp.attrs['roi_aspect_ratio']
-            combined_grp.attrs['roi_radius'] = file_grp.attrs['roi_radius']
-            combined_grp.attrs['roi_footprint'] = file_grp.attrs['roi_footprint']
-            combined_grp.attrs['roi_npix'] = file_grp.attrs['roi_npix']
+            if 's2p_cell_rois' in file_grp.attrs.keys():
+                combined_grp.attrs['s2p_cell_rois'] = file_grp.attrs['s2p_cell_rois']
 
             pix_raw_combo = pix_raw_run
             pix_cell_combo = pix_cell_run
             pix_np_combo = pix_np_run
-            df_f_cell_combo = df_f_cell_run
-            spks_cell_combo = spks_cell_run
             trial_fid_combo = trial_fid
             trial_run_combo = trial_run
             mean_pix_fid_combo = mean_pix_fid
-            motion_run_combo = motion_run
         else:
             #for now, lop off timepoints if doesn't match what we already have, if volumerate fast enough. this is negligible
             if pix_raw_run.shape[1]>pix_raw_combo.shape[1]:
@@ -571,17 +365,10 @@ def combine_trials(opts):
                 pix_raw_run = pix_raw_run[:,:-extra_frames,:]
                 pix_cell_run = pix_cell_run[:,:-extra_frames,:]
                 pix_np_run = pix_np_run[:,:-extra_frames,:]
-                df_f_cell_run = df_f_cell_run[:,:-extra_frames,:]
-                spks_cell_run = spks_cell_run[:,:-extra_frames,:]
-                motion_run = motion_run[:,:-extra_frames]
             
             pix_raw_combo = np.vstack((pix_raw_combo,pix_raw_run))
             pix_cell_combo = np.vstack((pix_cell_combo,pix_cell_run))
             pix_np_combo = np.vstack((pix_np_combo,pix_np_run))
-            df_f_cell_combo = np.vstack((df_f_cell_combo,df_f_cell_run))
-            spks_cell_combo = np.vstack((spks_cell_combo,spks_cell_run))
-
-            motion_run_combo = np.vstack((motion_run_combo,motion_run))
             
             trial_fid_combo = np.hstack((trial_fid_combo,trial_fid))
             trial_run_combo = np.hstack((trial_run_combo,trial_run))
@@ -591,9 +378,6 @@ def combine_trials(opts):
 
     #save combined traces to file
     #save arrays to file
-
-    motion = combined_grp.create_dataset('motion', motion_run_combo.shape, motion_run_combo.dtype)
-    motion[...] = motion_run_combo
 
     fset = combined_grp.create_dataset('/'.join([curr_slice, 'frames_tsec']), curr_tstamps.shape, curr_tstamps.dtype)
     fset[...] = curr_tstamps
@@ -610,20 +394,14 @@ def combine_trials(opts):
     pixset = combined_grp.create_dataset('/'.join([curr_slice, 'mean_pix']), mean_pix_fid_combo.shape, mean_pix_fid_combo.dtype)
     pixset[...] = mean_pix_fid_combo
 
-    raw_combined = combined_grp.create_dataset('/'.join([curr_slice, 'traces', 'pixel_value', 'raw']), pix_raw_combo.shape, pix_raw_combo.dtype)
+    raw_combined = combined_grp.create_dataset('/'.join([curr_slice, 'traces', 'raw']), pix_raw_combo.shape, pix_raw_combo.dtype)
     raw_combined[...] = pix_raw_combo
 
-    cell_combined = combined_grp.create_dataset('/'.join([curr_slice, 'traces', 'pixel_value', 'cell']), pix_cell_combo.shape, pix_cell_combo.dtype)
+    cell_combined = combined_grp.create_dataset('/'.join([curr_slice, 'traces', 'np_subtracted']), pix_cell_combo.shape, pix_cell_combo.dtype)
     cell_combined[...] = pix_cell_combo
 
-    np_combined = combined_grp.create_dataset('/'.join([curr_slice, 'traces', 'pixel_value', 'neuropil']), pix_np_combo.shape, pix_np_combo.dtype)
+    np_combined = combined_grp.create_dataset('/'.join([curr_slice, 'traces', 'neuropil']), pix_np_combo.shape, pix_np_combo.dtype)
     np_combined[...] = pix_np_combo
-
-    df_f_combined = combined_grp.create_dataset('/'.join([curr_slice,'traces', 'global_df_f', 'cell']), df_f_cell_combo.shape, df_f_cell_combo.dtype)
-    df_f_combined[...] = df_f_cell_combo
-
-    spks_combined = combined_grp.create_dataset('/'.join([curr_slice,'traces', 'spks', 'cell']), spks_cell_combo.shape, spks_cell_combo.dtype)
-    spks_combined[...] = spks_cell_combo
 
     combined_grp.close()
 
@@ -694,14 +472,13 @@ def evaluate_trials(opts):
     trace_arrays_dir = os.path.join(traceid_dir,'files')
     paradigm_dir = os.path.join(acquisition_dir, opts.combined_run, 'paradigm')
 
-
+    data_array_dir = os.path.join(traceid_dir, 'data_arrays')
+    if not os.path.exists(data_array_dir):
+        os.makedirs(data_array_dir)
 
     #read file
     parsedtraces_filepath = glob.glob(os.path.join(traceid_dir, 'files','parsedtraces*'))[0]
     file_grp = h5py.File(parsedtraces_filepath, 'r')
-
-    #get motion info
-    motion = np.array(file_grp['motion'])
 
 
     pre_frames = file_grp.attrs['pre_frames']
@@ -712,12 +489,9 @@ def evaluate_trials(opts):
 
     curr_slice = 'Slice01'#hard-code planar data for now
     #get raw pixel value arrays
-    pix_raw_array = np.array(file_grp[curr_slice]['traces']['pixel_value']['raw'])
-    pix_cell_array = np.array(file_grp[curr_slice]['traces']['pixel_value']['cell'])
-    pix_np_array = np.array(file_grp[curr_slice]['traces']['pixel_value']['neuropil'])
-
-    global_df_f_array = np.array(file_grp[curr_slice]['traces']['global_df_f']['cell'])
-    spks_array = np.array(file_grp[curr_slice]['traces']['spks']['cell'])
+    pix_raw_array = np.array(file_grp[curr_slice]['traces']['raw'])
+    pix_cell_array = np.array(file_grp[curr_slice]['traces']['np_subtracted'])
+    pix_np_array = np.array(file_grp[curr_slice]['traces']['neuropil'])
 
     mean_f_raw = np.nanmean(np.nanmean(pix_raw_array,0),0)
     mean_f_cell = np.nanmean(np.nanmean(pix_cell_array,0),0)
@@ -726,8 +500,8 @@ def evaluate_trials(opts):
 
     #open file for storage
     # Create outfile:
-    data_array_fn = 'processed_traces.hdf5'
-    data_array_filepath = os.path.join(traceid_dir, 'files', data_array_fn)
+    data_array_fn = 'processed_config_traces.hdf5'
+    data_array_filepath = os.path.join(traceid_dir, 'data_arrays', data_array_fn)
     data_grp = h5py.File(data_array_filepath, 'w')
 
     #save attributes
@@ -749,16 +523,12 @@ def evaluate_trials(opts):
     if 's2p_cell_rois' in file_grp.attrs.keys():
         data_grp.attrs['s2p_cell_rois'] = file_grp.attrs['s2p_cell_rois']
 
-
-
-
-    #file_grp.close()
+    file_grp.close()
 
     ntrials,ntpts,nrois = pix_cell_array.shape
     print('ROIs:%i'%(nrois))
     print('Trials:%i'%(ntrials))
 
-    #get empty arrays
     f_cell_array = np.zeros(pix_cell_array.shape)
     f_raw_array = np.zeros(pix_raw_array.shape)
     f_np_array = np.zeros(pix_np_array.shape)
@@ -767,25 +537,14 @@ def evaluate_trials(opts):
     df_raw_array = np.zeros(pix_raw_array.shape)
     df_np_array = np.zeros(pix_np_array.shape)
 
-    local_df_f_cell_array = np.zeros(pix_cell_array.shape)
-    local_df_f_raw_array = np.zeros(pix_raw_array.shape)
-    local_df_f_np_array = np.zeros(pix_np_array.shape)
+    df_f_cell_array = np.zeros(pix_cell_array.shape)
+    df_f_raw_array = np.zeros(pix_raw_array.shape)
+    df_f_np_array = np.zeros(pix_np_array.shape)
 
     zscore_cell_array = np.zeros(pix_cell_array.shape)
     zscore_raw_array = np.zeros(pix_raw_array.shape)
     zscore_np_array = np.zeros(pix_np_array.shape)
 
-    delta_global_df_f_array = np.zeros(pix_cell_array.shape)
-    delta_spks_array = np.zeros(pix_cell_array.shape)
-
-    zscore_global_df_f_array = np.zeros(pix_cell_array.shape)
-    zscore_spks_array = np.zeros(pix_cell_array.shape)
-
-
-    trial_stat = np.zeros((ntrials,nrois))
-    trial_pval = np.zeros((ntrials,nrois))
-
-    #evalue trials
     for tidx in range(ntrials):
     #tidx = 0
     #tidx = 100
@@ -798,22 +557,13 @@ def evaluate_trials(opts):
             pix_np = np.squeeze(pix_np_array[tidx,:,ridx].squeeze())
 
 
-            #get baseline and stimulus period values
+            #get baseline
             base_raw = pix_raw[0:pre_frames]
             stim_raw = pix_raw[pre_frames:pre_frames+stim_frames+1]
             base_cell = pix_cell[0:pre_frames]
             stim_cell = pix_cell[pre_frames:pre_frames+stim_frames+1]
             base_np = pix_np[0:pre_frames]
             stim_np = pix_np[pre_frames:pre_frames+stim_frames+1]
-            
-            base_df_f = global_df_f_array[tidx,0:pre_frames,ridx]
-            stim_df_f = global_df_f_array[tidx,pre_frames:pre_frames+stim_frames+1,ridx]
-            
-            base_spks = spks_array[tidx,0:pre_frames,ridx]
-            stim_spks = spks_array[tidx,pre_frames:pre_frames+stim_frames+1,ridx]
-            
-            #run some stats to determine if responsive trial(KS test)
-            trial_stat[tidx,ridx],trial_pval[tidx,ridx] = get_trial_stat(base_cell,stim_cell)
             
             #get raw fluoresence value
             f_raw = pix_raw
@@ -826,18 +576,10 @@ def evaluate_trials(opts):
             df_np = pix_np - np.mean(base_np)
 
 
-            #calculate local df/f
-            local_df_f_raw = df_raw/mean_f_raw[ridx]
-            local_df_f_cell = df_cell/mean_f_cell[ridx]
-            local_df_f_np = df_np/mean_f_np[ridx]
-            
-            #calculate global df_f
-            global_df_f = global_df_f_array[tidx,:,ridx] - np.mean(base_df_f)
-            zscore_df_f = (global_df_f_array[tidx,:,ridx] - np.mean(base_df_f))/np.std(base_df_f)
-            
-            #calculate change in spike count
-            delta_spks = spks_array[tidx,:,ridx] - np.mean(base_spks)
-            zscore_spks = (spks_array[tidx,:,ridx] - np.mean(base_spks)) / np.std(base_spks)
+            #calculate df/f
+            df_f_raw = df_raw/mean_f_raw[ridx]
+            df_f_cell = df_cell/mean_f_cell[ridx]
+            df_f_np = df_np/mean_f_np[ridx]
 
             #calculate z-score
             zscore_raw = (pix_raw - np.mean(base_raw))/np.std(base_raw)
@@ -847,26 +589,20 @@ def evaluate_trials(opts):
             #store in array
             f_raw_array[tidx,:,ridx] = f_raw
             df_raw_array[tidx,:,ridx] = df_raw
-            local_df_f_raw_array[tidx,:,ridx] = local_df_f_raw
+            df_f_raw_array[tidx,:,ridx] = df_f_raw
             zscore_raw_array[tidx,:,ridx] = zscore_raw
 
             f_cell_array[tidx,:,ridx] = f_cell
             df_cell_array[tidx,:,ridx] = df_cell
-            local_df_f_cell_array[tidx,:,ridx] = local_df_f_cell
+            df_f_cell_array[tidx,:,ridx] = df_f_cell
             zscore_cell_array[tidx,:,ridx] = zscore_cell
-            
-            delta_global_df_f_array[tidx,:,ridx] = global_df_f
-            zscore_global_df_f_array[tidx,:,ridx] = zscore_df_f
-            
-            delta_spks_array[tidx,:,ridx] = delta_spks
-            zscore_spks_array[tidx,:,ridx] = zscore_spks
 
             f_np_array[tidx,:,ridx] = f_np
             df_np_array[tidx,:,ridx] = df_np
-            local_df_f_np_array[tidx,:,ridx] = local_df_f_np
+            df_f_np_array[tidx,:,ridx] = df_f_np
             zscore_np_array[tidx,:,ridx] = zscore_np
 
-    #load trial paradigm info
+    #load trial info
     stimconfig_fn = 'trial_conditions.hdf5'
     stimconfig_filepath = os.path.join(paradigm_dir, 'files', stimconfig_fn)
     config_grp = h5py.File(stimconfig_filepath, 'r')
@@ -878,105 +614,165 @@ def evaluate_trials(opts):
 
     config_grp.close()
 
-    #save arrays to file
+    for cfg_idx in np.unique(trial_config):
+    #cfg_idx = 11
 
-    #save motion
-    motion_set = data_grp.create_dataset('motion', motion.shape, motion.dtype)
-    motion_set[...] = motion
+        cfg_key = 'config%03d'%(cfg_idx)
+        print(cfg_key)
+        tidx = np.where(trial_config == cfg_idx)[0]
+        print(len(tidx))
 
-    #save config specifics
-    trial_cfg_dset = data_grp.create_dataset('trial_config',trial_config.shape, trial_config.dtype)
-    trial_cfg_dset[...] = trial_config
+        #print(trial_img[tidx[0]],trial_cond[tidx[0]])
 
-    trial_img_dset = data_grp.create_dataset('trial_img',trial_img.shape, trial_img.dtype)
-    trial_img_dset[...] = trial_img
+        #get relevant traces
+        f_raw_config_trace = f_raw_array[tidx,:,:]
+        f_cell_config_trace = f_cell_array[tidx,:,:]
+        f_np_config_trace = f_np_array[tidx,:,:]
+        
+        df_raw_config_trace = df_raw_array[tidx,:,:]
+        df_raw_config_trace_mean = np.squeeze(np.nanmean(df_raw_config_trace,0))
+        df_raw_config_trace_se = stats.sem(df_raw_config_trace,0)
 
-    trial_cond_dset = data_grp.create_dataset('trial_cond',trial_cond.shape, trial_cond.dtype)
-    trial_cond_dset[...] = trial_cond
+        zscore_raw_config_trace = zscore_raw_array[tidx,:,:]
+        zscore_raw_config_trace_mean = np.squeeze(np.nanmean(zscore_raw_config_trace,0))
+        zscore_raw_config_trace_se = stats.sem(zscore_raw_config_trace,0)
 
+        df_f_raw_config_trace = df_f_raw_array[tidx,:,:]
+        df_f_raw_config_trace_mean = np.squeeze(np.nanmean(df_f_raw_config_trace,0))
+        df_f_raw_config_trace_se = stats.sem(df_f_raw_config_trace,0)
 
+        df_cell_config_trace = df_cell_array[tidx,:,:]
+        df_cell_config_trace_mean = np.squeeze(np.nanmean(df_cell_config_trace,0))
+        df_cell_config_trace_se = stats.sem(df_cell_config_trace,0)
 
-    #save trace arrays
+        zscore_cell_config_trace = zscore_cell_array[tidx,:,:]
+        zscore_cell_config_trace_mean = np.squeeze(np.nanmean(zscore_cell_config_trace,0))
+        zscore_cell_config_trace_se = stats.sem(zscore_cell_config_trace,0)
 
+        df_f_cell_config_trace = df_f_cell_array[tidx,:,:]
+        df_f_cell_config_trace_mean = np.squeeze(np.nanmean(df_f_cell_config_trace,0))
+        df_f_cell_config_trace_se = stats.sem(df_f_cell_config_trace,0)
 
-    raw_f_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','f','raw']),\
-                                               f_raw_array.shape, f_raw_array.dtype)
-    raw_f_trace_dset[...] = f_raw_array
+        df_np_config_trace = df_np_array[tidx,:,:]
+        df_np_config_trace_mean = np.squeeze(np.nanmean(df_np_config_trace,0))
+        df_np_config_trace_se = stats.sem(df_np_config_trace,0)
 
-    cell_f_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','f','cell']),\
-                                                f_cell_array.shape, f_cell_array.dtype)
-    cell_f_trace_dset[...] = f_cell_array
+        zscore_np_config_trace = zscore_np_array[tidx,:,:]
+        zscore_np_config_trace_mean = np.squeeze(np.nanmean(zscore_np_config_trace,0))
+        zscore_np_config_trace_se = stats.sem(zscore_np_config_trace,0)
 
-    np_f_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','f','np']),\
-                                              f_np_array.shape, f_np_array.dtype)
-    np_f_trace_dset[...] = f_np_array
-
-    raw_df_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','df','raw']),\
-                                                df_raw_array.shape, df_raw_array.dtype)
-    raw_df_trace_dset[...] = df_raw_array
-
-    cell_df_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','df','cell']),\
-                                                 df_cell_array.shape, df_cell_array.dtype)
-    cell_df_trace_dset[...] = df_cell_array
-
-    np_df_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','df','np']),\
-                                               df_np_array.shape, df_np_array.dtype)
-    np_df_trace_dset[...] = df_np_array
-
-    raw_df_ftrace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','local_df_f','raw']),\
-                                                 local_df_f_raw_array.shape, local_df_f_raw_array.dtype)
-    raw_df_ftrace_dset[...] = local_df_f_raw_array
-
-    cell_df_ftrace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','local_df_f','cell']),\
-                                                  local_df_f_cell_array.shape, local_df_f_cell_array.dtype)
-    cell_df_ftrace_dset[...] = local_df_f_cell_array
-
-    np_df_ftrace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','local_df_f','np']),\
-                                                local_df_f_np_array.shape, local_df_f_np_array.dtype)
-    np_df_ftrace_dset[...] = local_df_f_np_array
+        df_f_np_config_trace = df_f_np_array[tidx,:,:]
+        df_f_np_config_trace_mean = np.squeeze(np.nanmean(df_f_np_config_trace,0))
+        df_f_np_config_trace_se = stats.sem(df_f_np_config_trace,0)
 
 
-    raw_zscore_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','zscore_df','raw']),\
-                                                    zscore_raw_array.shape, zscore_raw_array.dtype)
-    raw_zscore_trace_dset[...] = zscore_raw_array
+        #save config specifics
+        img_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'img']),(1,),dtype = int)
+        img_dset[...] = trial_img[tidx[0]]
 
-    cell_zscore_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','zscore_df','cell']),\
-                                                     zscore_cell_array.shape, zscore_cell_array.dtype)
-    cell_zscore_trace_dset[...] = zscore_cell_array
+        cond_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'scene_cond']),(1,),dtype = int)
+        cond_dset[...] = trial_cond[tidx[0]]
 
-    np_zscore_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','zscore_df','np']),\
-                                                   zscore_np_array.shape, zscore_np_array.dtype)
-    np_zscore_trace_dset[...] = zscore_np_array
+        #save config responses
+        raw_f_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'f', 'trace','raw']), f_raw_config_trace.shape, f_raw_config_trace.dtype)
+        raw_f_trace_dset[...] = f_raw_config_trace
+        
+        cell_f_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'f', 'trace','np_subtracted']), f_cell_config_trace.shape, f_cell_config_trace.dtype)
+        cell_f_trace_dset[...] = f_cell_config_trace
 
-     
-    global_df_ftrace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','global_df_f','cell']),\
-                                                    delta_global_df_f_array.shape, delta_global_df_f_array.dtype)
-    global_df_ftrace_dset[...] = delta_global_df_f_array   
+        np_f_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'f', 'trace','np']), f_np_config_trace.shape, f_np_config_trace.dtype)
+        np_f_trace_dset[...] = f_np_config_trace
 
-    zscore_df_f_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','zscore_df_f','cell']),\
-                                                     zscore_global_df_f_array.shape, zscore_global_df_f_array.dtype)
-    zscore_df_f_trace_dset[...] = zscore_global_df_f_array
 
-    spks_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','delta_spks','cell']),\
-                                              delta_spks_array.shape, delta_spks_array.dtype)
+        raw_df_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df', 'trace','raw']), df_raw_config_trace.shape, df_raw_config_trace.dtype)
+        raw_df_trace_dset[...] = df_raw_config_trace
 
-    spks_trace_dset[...] = delta_spks_array   
+        raw_df_mean_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df', 'trace_mean','raw']), df_raw_config_trace_mean.shape, df_raw_config_trace_mean.dtype)
+        raw_df_mean_dset[...] = df_raw_config_trace_mean
 
-    zscore_spks_trace_dset = data_grp.create_dataset('/'.join([curr_slice, 'traces','zscore_spks','cell']),\
-                                                     zscore_spks_array.shape, zscore_spks_array.dtype)
-    zscore_spks_trace_dset[...] = zscore_spks_array
+        raw_df_se_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df', 'trace_se','raw']), df_raw_config_trace_se.shape, df_raw_config_trace_se.dtype)
+        raw_df_se_dset[...] = df_raw_config_trace_se
 
+        cell_df_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df', 'trace','np_subtracted']), df_cell_config_trace.shape, df_cell_config_trace.dtype)
+        cell_df_trace_dset[...] = df_cell_config_trace
+
+        cell_df_mean_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df', 'trace_mean','np_subtracted']), df_cell_config_trace_mean.shape, df_cell_config_trace_mean.dtype)
+        cell_df_mean_dset[...] = df_cell_config_trace_mean
+
+        cell_df_se_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df', 'trace_se','np_subtracted']), df_cell_config_trace_se.shape, df_cell_config_trace_se.dtype)
+        cell_df_se_dset[...] = df_cell_config_trace_se
+
+        np_df_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df', 'trace','neuropil']), df_np_config_trace.shape, df_np_config_trace.dtype)
+        np_df_trace_dset[...] = df_np_config_trace
+
+        np_df_mean_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df', 'trace_mean','neuropil']), df_np_config_trace_mean.shape, df_np_config_trace_mean.dtype)
+        np_df_mean_dset[...] = df_np_config_trace_mean
+
+        np_df_se_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df', 'trace_se','neuropil']), df_np_config_trace_se.shape, df_np_config_trace_se.dtype)
+        np_df_se_dset[...] = df_np_config_trace_se
+      
+
+
+        raw_df_f_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df_f', 'trace','raw']), df_f_raw_config_trace.shape, df_f_raw_config_trace.dtype)
+        raw_df_f_trace_dset[...] = df_f_raw_config_trace
+
+        raw_df_f_mean_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df_f', 'trace_mean','raw']), df_f_raw_config_trace_mean.shape, df_f_raw_config_trace_mean.dtype)
+        raw_df_f_mean_dset[...] = df_f_raw_config_trace_mean
+
+        raw_df_f_se_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df_f', 'trace_se','raw']), df_f_raw_config_trace_se.shape, df_f_raw_config_trace_se.dtype)
+        raw_df_f_se_dset[...] = df_f_raw_config_trace_se
+
+        cell_df_f_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df_f', 'trace','np_subtracted']), df_f_cell_config_trace.shape, df_f_cell_config_trace.dtype)
+        cell_df_f_trace_dset[...] = df_f_cell_config_trace
+
+        cell_df_f_mean_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df_f', 'trace_mean','np_subtracted']), df_f_cell_config_trace_mean.shape, df_f_cell_config_trace_mean.dtype)
+        cell_df_f_mean_dset[...] = df_f_cell_config_trace_mean
+
+        cell_df_f_se_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df_f', 'trace_se','np_subtracted']), df_f_cell_config_trace_se.shape, df_f_cell_config_trace_se.dtype)
+        cell_df_f_se_dset[...] = df_f_cell_config_trace_se
+
+        np_df_f_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df_f', 'trace','neuropil']), df_f_np_config_trace.shape, df_f_np_config_trace.dtype)
+        np_df_f_trace_dset[...] = df_f_np_config_trace
+
+        np_df_f_mean_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df_f', 'trace_mean','neuropil']), df_f_np_config_trace_mean.shape, df_f_np_config_trace_mean.dtype)
+        np_df_f_mean_dset[...] = df_f_np_config_trace_mean
+
+        np_df_f_se_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'df_f', 'trace_se','neuropil']), df_f_np_config_trace_se.shape, df_f_np_config_trace_se.dtype)
+        np_df_f_se_dset[...] = df_f_np_config_trace_se
+
+
+        raw_zscore_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'zscore', 'trace','raw']), zscore_raw_config_trace.shape, zscore_raw_config_trace.dtype)
+        raw_zscore_trace_dset[...] = zscore_raw_config_trace
+
+        raw_zscore_mean_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'zscore', 'trace_mean','raw']), zscore_raw_config_trace_mean.shape, zscore_raw_config_trace_mean.dtype)
+        raw_zscore_mean_dset[...] = zscore_raw_config_trace_mean
+
+        raw_zscore_se_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'zscore', 'trace_se','raw']), zscore_raw_config_trace_se.shape, zscore_raw_config_trace_se.dtype)
+        raw_zscore_se_dset[...] = zscore_raw_config_trace_se
+
+        cell_zscore_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'zscore', 'trace','np_subtracted']), zscore_cell_config_trace.shape, zscore_cell_config_trace.dtype)
+        cell_zscore_trace_dset[...] = zscore_cell_config_trace
+
+        cell_zscore_mean_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'zscore', 'trace_mean','np_subtracted']), zscore_cell_config_trace_mean.shape, zscore_cell_config_trace_mean.dtype)
+        cell_zscore_mean_dset[...] = zscore_cell_config_trace_mean
+
+        cell_zscore_se_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'zscore', 'trace_se','np_subtracted']), zscore_cell_config_trace_se.shape, zscore_cell_config_trace_se.dtype)
+        cell_zscore_se_dset[...] = zscore_cell_config_trace_se
+
+        np_zscore_trace_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'zscore', 'trace','neuropil']), zscore_np_config_trace.shape, zscore_np_config_trace.dtype)
+        np_zscore_trace_dset[...] = zscore_np_config_trace
+
+        np_zscore_mean_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'zscore', 'trace_mean','neuropil']), zscore_np_config_trace_mean.shape, zscore_np_config_trace_mean.dtype)
+        np_zscore_mean_dset[...] = zscore_np_config_trace_mean
+
+        np_zscore_se_dset = data_grp.create_dataset('/'.join([curr_slice, cfg_key, 'zscore', 'trace_se','neuropil']), zscore_np_config_trace_se.shape, zscore_np_config_trace_se.dtype)
+        np_zscore_se_dset[...] = zscore_np_config_trace_se
 
     data_grp.close()
 
 def get_trial_responses(opts):
-    traceid = '%s_s2p'%(opts.traceid)
 
-    if opts.motion_thresh is not None:
-        motion_thresh = int(opts.motion_thresh)
-    else:
-        motion_thresh = 'None'
-        
+    traceid = '%s_s2p'%(opts.traceid)
     #% Set up paths:    
     acquisition_dir = os.path.join(opts.rootdir, opts.animalid, opts.session, opts.acquisition)
 
@@ -988,16 +784,19 @@ def get_trial_responses(opts):
 
     #output directory
     responses_dir = os.path.join(acquisition_dir, opts.combined_run,'responses', traceid)
+    data_array_dir = os.path.join(responses_dir, 'data_arrays')
+        
+    if not os.path.exists(os.path.join(data_array_dir,'figures')):
+        os.makedirs(os.path.join(data_array_dir,'figures'))
 
-    responses_file_dir = os.path.join(responses_dir,'files')
-    if not os.path.exists(responses_file_dir):os.makedirs(responses_file_dir)
 
     #open file to read
-    trace_fn = 'processed_traces.hdf5'
-    trace_filepath = os.path.join(traceid_dir, 'files', trace_fn)
-    print('Opening:%s'%(trace_filepath))
-    data_grp = h5py.File(trace_filepath, 'r')
+    data_array_fn = 'processed_config_traces.hdf5'
+    data_array_filepath = os.path.join(traceid_dir, 'data_arrays', data_array_fn)
+    print(data_array_filepath)
+    data_grp = h5py.File(data_array_filepath, 'r')
 
+    frames_tsec = data_grp.attrs['frames_tsec']
     nrois = data_grp.attrs['nrois']
     print('ROIs:%i'%(nrois))
 
@@ -1014,75 +813,183 @@ def get_trial_responses(opts):
     trial_fid = np.array(data_grp.attrs['trial_fid'])
     trial_run = np.array(data_grp.attrs['trial_run'])
 
-    #get traces
-    trial_traces_df = np.array(data_grp['/'.join([curr_slice,'traces','df','cell'])])
-    trial_traces_dspks = np.array(data_grp['/'.join([curr_slice,'traces','delta_spks','cell'])])
-
-    trial_traces_lcl_df_f = np.array(data_grp['/'.join([curr_slice,'traces','local_df_f','cell'])])
-    trial_traces_glbl_df_f = np.array(data_grp['/'.join([curr_slice,'traces','global_df_f','cell'])])
-
-    trial_traces_zscore_df = np.array(data_grp['/'.join([curr_slice,'traces','zscore_df','cell'])])
-    trial_traces_zscore_spks = np.array(data_grp['/'.join([curr_slice,'traces','zscore_spks','cell'])])
-
-    #get mean during stim period
-    trial_mean_df = np.squeeze(np.nanmean(trial_traces_df[:,stim_period0:stim_period1,:],1))
-    trial_mean_dspks = np.squeeze(np.nanmean(trial_traces_dspks[:,stim_period0:stim_period1,:],1))
-    trial_mean_lcl_df_f = np.squeeze(np.nanmean(trial_traces_lcl_df_f[:,stim_period0:stim_period1,:],1))
-    trial_mean_glbl_df_f = np.squeeze(np.nanmean(trial_traces_glbl_df_f[:,stim_period0:stim_period1,:],1))
-    trial_mean_zscore_df = np.squeeze(np.nanmean(trial_traces_zscore_df[:,stim_period0:stim_period1,:],1))
-    trial_mean_zscore_spks = np.squeeze(np.nanmean(trial_traces_zscore_spks[:,stim_period0:stim_period1,:],1))
-
-    #get max during stim period
-    trial_max_df = np.squeeze(np.nanmax(trial_traces_df[:,stim_period0:stim_period1,:],1))
-    trial_max_dspks = np.squeeze(np.nanmax(trial_traces_dspks[:,stim_period0:stim_period1,:],1))
-    trial_max_lcl_df_f = np.squeeze(np.nanmax(trial_traces_lcl_df_f[:,stim_period0:stim_period1,:],1))
-    trial_max_glbl_df_f = np.squeeze(np.nanmax(trial_traces_glbl_df_f[:,stim_period0:stim_period1,:],1))
-    trial_max_zscore_df = np.squeeze(np.nanmax(trial_traces_zscore_df[:,stim_period0:stim_period1,:],1))
-    trial_max_zscore_spks = np.squeeze(np.nanmax(trial_traces_zscore_spks[:,stim_period0:stim_period1,:],1))
 
 
+    config_img = np.zeros((len(data_grp[curr_slice].keys())))
+    config_cond = np.zeros((len(data_grp[curr_slice].keys())))
+    for cfg_count,cfg_key in enumerate(data_grp[curr_slice].keys()):
+        config_img[cfg_count] = np.array(data_grp['/'.join([curr_slice,cfg_key,'img'])])[0]+1
+        config_cond[cfg_count] = np.array(data_grp['/'.join([curr_slice,cfg_key,'scene_cond'])])[0]
 
-    #get max motion per trial
-    trial_max_motion = np.nanmax(np.abs(np.array(data_grp['motion'])),1)
+    # cfg_key = 'config006'
+    # cfg_count = 0 
+    # print(np.array(data_grp[curr_slice][cfg_key]['img']))
+    # print(np.array(data_grp[curr_slice][cfg_key]['scene_cond']))
 
-    #save arrays
+    for cfg_count,cfg_key in enumerate(data_grp[curr_slice].keys()):
+      #  print(cfg_key)
+        trial_traces_f = np.array(data_grp['/'.join([curr_slice,cfg_key,'f', 'trace','np_subtracted'])])
+        trial_traces_df = np.array(data_grp['/'.join([curr_slice,cfg_key,'df', 'trace','np_subtracted'])])
+        trial_traces_df_f = np.array(data_grp['/'.join([curr_slice,cfg_key,'df_f', 'trace','np_subtracted'])])
+        trial_traces_zscore = np.array(data_grp['/'.join([curr_slice,cfg_key,'zscore', 'trace','np_subtracted'])])
+        
+        trial_response_df = np.squeeze(np.mean(trial_traces_df[:,stim_period0:stim_period1,:],1))
+        trial_response_df_f = np.squeeze(np.mean(trial_traces_df_f[:,stim_period0:stim_period1,:],1))
+        trial_response_zscore = np.squeeze(np.mean(trial_traces_zscore[:,stim_period0:stim_period1,:],1))
+        
+        trial_baseline_f = np.squeeze(np.mean(trial_traces_f[:,0:stim_period0,:],1))
+        trial_response_f = np.squeeze(np.mean(trial_traces_f[:,stim_period0:stim_period1,:],1))
+        trial_response_f_zscore = np.true_divide(trial_response_f-np.mean(trial_baseline_f,0),\
+                   np.std(trial_baseline_f,0))
+
+        if cfg_count == 0:
+            response_matrix_df = trial_response_df
+            response_matrix_df_f = trial_response_df_f
+            response_matrix_zscore = trial_response_zscore
+            response_matrix_f_zscore = trial_response_f_zscore
+            response_matrix_f = trial_response_f
+            baseline_matrix_f = trial_baseline_f
+        else:
+            response_matrix_df = np.dstack((response_matrix_df,trial_response_df))
+            response_matrix_df_f = np.dstack((response_matrix_df_f,trial_response_df_f))
+            response_matrix_zscore = np.dstack((response_matrix_zscore,trial_response_zscore))
+            response_matrix_f_zscore = np.dstack((response_matrix_f_zscore,trial_response_f_zscore))
+            response_matrix_f = np.dstack((response_matrix_f,trial_response_f))
+            baseline_matrix_f = np.dstack((baseline_matrix_f,trial_baseline_f))
+
+    response_matrix_f = np.swapaxes(response_matrix_f,1,2) 
+    baseline_matrix_f = np.swapaxes(baseline_matrix_f,1,2) 
+    response_matrix_df = np.swapaxes(response_matrix_df,1,2) 
+    response_matrix_df_f = np.swapaxes(response_matrix_df_f,1,2) 
+    response_matrix_zscore = np.swapaxes(response_matrix_zscore,1,2) 
+    response_matrix_f_zscore = np.swapaxes(response_matrix_f_zscore,1,2)
+
+    #perform permutation test
+    nreps = 100
+    ntrials,nconfigs,nrois = response_matrix_f.shape
+    ks_stat = np.empty((nconfigs,nrois))
+    ks_p = np.empty((nconfigs,nrois))
+    perm_tstat = np.empty((nconfigs,nrois))
+    perm_p = np.empty((nconfigs,nrois))
+    paired_tstat = np.empty((nconfigs,nrois))
+    paired_p = np.empty((nconfigs,nrois))
+    simple_tstat = np.empty((nconfigs,nrois))
+    simple_p = np.empty((nconfigs,nrois))
+
+    for cidx in range(nconfigs):
+        for ridx in range(nrois):
+            #get true change in fluoresence
+            true_df = np.squeeze(response_matrix_df[:,cidx,ridx])
+            
+            #repeat permutation a bunch of times
+            for rep in range(nreps):
+                shuffle_all = np.random.permutation(np.hstack((np.squeeze(baseline_matrix_f[:,cidx,ridx]),np.squeeze(response_matrix_f[:,cidx,ridx]))))
+
+                shuffle_base = shuffle_all[0:ntrials]
+                shuffle_stim = shuffle_all[ntrials:]
+
+                if rep == 0:
+                    shuffle_df = shuffle_stim - shuffle_base
+                else:
+                    shuffle_df = np.hstack((shuffle_df,shuffle_stim - shuffle_base))
+            
+            #performs some stats and strone
+            ks_stat[cidx,ridx], ks_p[cidx,ridx] = stats.ks_2samp(true_df,shuffle_df)
+            perm_tstat[cidx,ridx], perm_p[cidx,ridx] = stats.ttest_ind(true_df,shuffle_df,equal_var = False)#using this test since the sampled come from same cell
+            
+        #get ttest stats by comparing df distribution to 0
+        simple_tstat[cidx,ridx], simple_p[cidx,ridx] = stats.ttest_1samp(np.squeeze(response_matrix_df[:,cidx,ridx]),0)
+        
+        #get ttest stats by comparing pixel values between baseline and stim period
+        paired_tstat[cidx,ridx], paired_p[cidx,ridx] = stats.ttest_rel(np.squeeze(response_matrix_f[:,cidx,ridx]),np.squeeze(baseline_matrix_f[:,cidx,ridx]))
+    
+    #sign your p-values
+    simple_p = np.sign(simple_tstat)*simple_p
+    paired_p = np.sign(paired_tstat)*paired_p
+
+    #do split-half correlation to assess reliability of each cell
+    nreps = 100
+
+    split_size = int(np.floor(ntrials/2))
+    R_cells = np.zeros((nreps,nrois))
+
+
+    for rep in range(nreps):
+
+        #randomly split
+        rand_trials = np.random.permutation(ntrials)
+        half1 = response_matrix_df[rand_trials[0:split_size]]
+        half2 = response_matrix_df[rand_trials[split_size:-1]]
+
+        #get mean response across trials
+        half1_mean = np.squeeze(np.mean(half1,0))
+        half2_mean = np.squeeze(np.mean(half2,0))
+
+        #get cell split-half correlation
+        for ridx in range(nrois):
+            R_tmp = np.corrcoef(np.squeeze(half1_mean[:,ridx]),np.squeeze(half2_mean[:,ridx]))
+            R_cells[rep,ridx] = R_tmp[0,1]
+    split_half_R = np.nanmean(R_cells,0)
+    #save to array
 
     #open file for storage
     # Create outfile:
     resp_array_fn = 'trial_response_array.hdf5'
-    resp_array_filepath = os.path.join(responses_file_dir, resp_array_fn)
+    resp_array_filepath = os.path.join(data_array_dir, resp_array_fn)
     print('Saving to: %s'%(resp_array_filepath))
     resp_grp = h5py.File(resp_array_filepath, 'w')
 
     #copy attributes
     for att_key in data_grp.attrs.keys():
         resp_grp.attrs[att_key] = data_grp.attrs[att_key]
+    resp_grp.attrs['config_img'] = config_img
+    resp_grp.attrs['config_cond'] = config_cond
 
-    resp_grp['trial_config'] = np.array(data_grp['trial_config'])
-    resp_grp['trial_cond'] = np.array(data_grp['trial_cond'])
-    resp_grp['trial_img'] = np.array(data_grp['trial_img'])
+    data_grp.close()
+
+    #save response
+    f_zscore_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'f_zscore']), response_matrix_f_zscore.shape, response_matrix_f_zscore.dtype)
+    f_zscore_dset[...] = response_matrix_f_zscore
+
+    df_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'df']), response_matrix_df.shape, response_matrix_df.dtype)
+    df_dset[...] = response_matrix_df
+
+    df_f_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'df_f']), response_matrix_df_f.shape, response_matrix_df_f.dtype)
+    df_f_dset[...] = response_matrix_df_f
+
+    zscore_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'zscore']), response_matrix_zscore.shape, response_matrix_zscore.dtype)
+    zscore_dset[...] = response_matrix_zscore
+
+    kstat_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'ks_stat']), ks_stat.shape, ks_stat.dtype)
+    kstat_dset[...] = ks_stat
+
+    ksp_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'ks_p']), ks_stat.shape, ks_stat.dtype)
+    ksp_dset[...] = ks_p
+
+    perm_stat_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'perm_tstat']), perm_tstat.shape, perm_tstat.dtype)
+    perm_stat_dset[...] = perm_tstat
+
+    perm_p_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'perm_p']), perm_p.shape, perm_p.dtype)
+    perm_p_dset[...] = perm_p
+
+    simple_stat_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'simple_tstat']), simple_tstat.shape, simple_tstat.dtype)
+    simple_stat_dset[...] = simple_tstat
 
 
-    resp_grp['trial_max_motion'] = trial_max_motion
+    simple_p_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'simple_pval']), simple_p.shape, simple_p.dtype)
+    simple_p_dset[...] = simple_p
 
-    resp_grp['/'.join([curr_slice,'mean_response','df'])] = trial_mean_df
-    resp_grp['/'.join([curr_slice,'mean_response','dspks'])] = trial_mean_dspks
-    resp_grp['/'.join([curr_slice,'mean_response','local_df_f'])] = trial_mean_lcl_df_f
+    paired_stat_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'paired_tstat']), paired_tstat.shape, paired_tstat.dtype)
+    paired_stat_dset[...] = paired_tstat
 
-    resp_grp['/'.join([curr_slice,'mean_response','global_df_f'])] = trial_mean_glbl_df_f
-    resp_grp['/'.join([curr_slice,'mean_response','zscore_df'])] = trial_mean_zscore_df
-    resp_grp['/'.join([curr_slice,'mean_response','zscore_spks'])] = trial_mean_zscore_spks
 
-    resp_grp['/'.join([curr_slice,'max_response','df'])] = trial_max_df
-    resp_grp['/'.join([curr_slice,'max_response','dspks'])] = trial_max_dspks
-    resp_grp['/'.join([curr_slice,'max_response','local_df_f'])] = trial_max_lcl_df_f
-    resp_grp['/'.join([curr_slice,'max_response','global_df_f'])] = trial_max_glbl_df_f
-    resp_grp['/'.join([curr_slice,'max_response','zscore_df'])] = trial_max_zscore_df
-    resp_grp['/'.join([curr_slice,'max_response','zscore_spks'])] = trial_max_zscore_spks
+    paired_p_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'paired_pval']), paired_p.shape, paired_p.dtype)
+    paired_p_dset[...] = paired_p
 
+    r_dset = resp_grp.create_dataset('/'.join([curr_slice, 'responses' ,'split_half_R']), split_half_R.shape, split_half_R.dtype)
+    r_dset[...] = split_half_R
 
     resp_grp.close()
-
 
 class Struct():
     pass
@@ -1100,7 +1007,6 @@ def extract_options(options):
     parser.add_option('-T', '--traceid', action='store', dest='traceid', default='', help="(ex: traces001_s2p)")
     parser.add_option('-r', '--run_list', action='callback', dest='run_list', default='',type='string',callback=get_comma_separated_args, help='comma-separated names of run dirs containing tiffs to be processed (ex: run1, run2, run3)')
     parser.add_option('-C', '--combined_run', action='store', dest='combined_run', default='', help='name of combo run') 
-    parser.add_option('-m', '--motion_thresh', action='store', dest='motion_thresh', default='5', help='threshold for motion to exclude trials') 
 
     (options, args) = parser.parse_args() 
 
@@ -1117,20 +1023,13 @@ def main(options):
     
     options = extract_options(options)
 
-
     print('----- Parsing trials -----')
     parse_trials(options)
+    # print('----- Combining trials ----')
+    # combine_trials(options)
+    # print('----- Evaluating trials ----')
+    # evaluate_trials(options)
 
-    print('----- Plotting Motion -----')
-    plot_motion(options)
-
-    print('----- Combining trials ----')
-    combine_trials(options)
-    print('----- Evaluating trials ----')
-    evaluate_trials(options)
-    print('----- Getting mean response for trials ----')
-    get_trial_responses(options)
-    
 
     
 #%%

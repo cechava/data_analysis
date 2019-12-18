@@ -42,6 +42,27 @@ def preprocess_trace(F,ops):
 
     return F
 
+def get_df_F(F,ops):
+    #lifted from suite2p dcnv module
+    sig = ops['sig_baseline']
+    win = int(ops['win_baseline']*ops['fs'])    
+    if ops['baseline']=='maximin':
+        Flow = filters.gaussian_filter(F,    [0., sig])
+        Flow = filters.minimum_filter1d(Flow,    win)
+        Flow = filters.maximum_filter1d(Flow,    win)
+    elif ops['baseline']=='constant':
+        Flow = filters.gaussian_filter(F,    [0., sig])
+        Flow = np.amin(Flow)
+    elif ops['baseline']=='constant_prctile':
+        Flow = np.percentile(F, ops['prctile_baseline'], axis=1)
+        Flow = np.expand_dims(Flow, axis = 1)
+    else:
+        Flow = 0.
+
+    F = (F - Flow)/Flow
+
+    return F
+
 def get_comma_separated_args(option, opt, value, parser):
   setattr(parser.values, option.dest, value.split(','))
 
@@ -57,11 +78,6 @@ def parse_trace(opts):
     #% Set up paths:    
     acquisition_dir = os.path.join(opts.rootdir, opts.animalid, opts.session, opts.acquisition)
 
-    fig_dir = os.path.join(opts.rootdir, opts.animalid, opts.session,'motion_figures')
-    if not os.path.isdir(fig_dir):
-        os.makedirs(fig_dir)
-
-
 
     s2p_source_dir = os.path.join(acquisition_dir, opts.run,'processed', opts.analysis, 'suite2p','plane0')
 
@@ -72,6 +88,7 @@ def parse_trace(opts):
     s2p_stat_fn = os.path.join(s2p_source_dir,'stat.npy')
     s2p_ops_fn = os.path.join(s2p_source_dir,'ops.npy')
     s2p_cell_fn = os.path.join(s2p_source_dir,'iscell.npy')
+    s2p_spks_fn = os.path.join(s2p_source_dir,'spks.npy')
 
     print(s2p_ops_fn)
 
@@ -81,10 +98,11 @@ def parse_trace(opts):
     s2p_raw_trace_data = np.load(s2p_raw_trace_fn)
     s2p_iscell = np.load(s2p_cell_fn)[:,0]
     s2p_np_trace_data = np.load(s2p_np_trace_fn)
+    s2p_spks_data = np.load(s2p_spks_fn)
 
     #get offset
     motion_offset = np.sqrt(np.power(s2p_ops['xoff'],2)+np.power(s2p_ops['yoff'],2))
-    motion_offset = motion_offset - motion_offset[0]
+    # motion_offset = motion_offset - motion_offset[0]
 
 
     #correct for neuropil
@@ -113,7 +131,49 @@ def parse_trace(opts):
         offset = np.tile(offset,(1,corrected_traces.shape[1]))
         s2p_cell_trace_data  = s2p_cell_trace_data +offset
 
+    #correcting for negative and very small values
+    if np.min(s2p_cell_trace_data)<10:
+        s2p_cell_trace_data = s2p_cell_trace_data + (abs(np.min(s2p_cell_trace_data))+10)
+
+        
+    #get fractional fluoresence using baseline methods in ops structure
+    s2p_cell_df_f_data = get_df_F(s2p_cell_trace_data, s2p_ops)
+
+    #bin spikes
+    conv_win_size = int(round(s2p_ops['fs']/4))#500 ms binning
+    print((1/conv_win_size))
+    spks_pad = np.pad(s2p_spks_data, ((0,0),(conv_win_size-1, 0)), 'edge')
+
+
+    binned_spks_data = np.array([np.convolve(spks_pad[i,:],np.ones((conv_win_size,))*(1/float(conv_win_size)),'valid') for i in range(spks_pad.shape[0])])
+
+    del s2p_spks_data,spks_pad
+
+
+     
+        
     cell_idxs = np.where(s2p_iscell==1)[0]
+
+    #get roi info
+    roi_center_x = np.zeros((len(s2p_stat),))
+    roi_center_y = np.zeros((len(s2p_stat),))
+    roi_compact = np.zeros((len(s2p_stat),))
+    roi_skew = np.zeros((len(s2p_stat),))
+    roi_aspect_ratio = np.zeros((len(s2p_stat),))
+    roi_footprint = np.zeros((len(s2p_stat),))
+    roi_radius = np.zeros((len(s2p_stat),))
+    roi_npix = np.zeros((len(s2p_stat),))
+
+    for ridx in range(len(s2p_stat)):
+        roi_center_x[ridx] = np.mean(s2p_stat[ridx]['xpix'])
+        roi_center_y[ridx] = np.mean(s2p_stat[ridx]['ypix'])
+        roi_compact[ridx] = s2p_stat[ridx]['compact']
+        roi_skew[ridx] = s2p_stat[ridx]['skew']
+        roi_aspect_ratio[ridx] = s2p_stat[ridx]['aspect_ratio']
+        roi_radius = s2p_stat[ridx]['radius']
+        roi_footprint[ridx] = s2p_stat[ridx]['footprint']
+        roi_npix[ridx] = s2p_stat[ridx]['npix']
+
 
     last_idx = 0#start off at the beginning
 
@@ -179,20 +239,23 @@ def parse_trace(opts):
             s2p_cell_traces = np.transpose(s2p_cell_trace_data[:,idx0:idx1])
             s2p_np_traces = np.transpose(s2p_np_trace_data[:,idx0:idx1])
             s2p_raw = np.transpose(s2p_raw_trace_data[:,idx0:idx1])
+            
+            s2p_cell_df_f_trace = np.transpose(s2p_cell_df_f_data[:,idx0:idx1])
+            binned_spks_trace =  np.transpose(binned_spks_data[:,idx0:idx1])
 
             motion_trace = motion_offset[idx0:idx1]
-            #plot motion
-            fig=plt.figure(figsize = (20, 5))
-            plt.plot(frames_tsec,motion_trace)
-            plt.xlabel('Time (secs)',fontsize=20)
-            plt.ylabel('Offset',fontsize=20)
+            # #plot motion
+            # fig=plt.figure(figsize = (20, 5))
+            # plt.plot(frames_tsec,motion_trace)
+            # plt.xlabel('Time (secs)',fontsize=20)
+            # plt.ylabel('Offset',fontsize=20)
 
-            ax = plt.gca()
-            ax.set_ylim([np.min(motion_offset),np.max(motion_offset)])
+            # ax = plt.gca()
+            # ax.set_ylim([np.min(motion_offset),np.max(motion_offset)])
 
-            fig_fn = '%s_%s_%s_%s_absolute_motion.png'%(opts.animalid,opts.session,indie_run,curr_file)
-            plt.savefig(os.path.join(fig_dir,fig_fn))
-            plt.close()
+            # fig_fn = '%s_%s_%s_%s_absolute_motion.png'%(opts.animalid,opts.session,indie_run,curr_file)
+            # plt.savefig(os.path.join(fig_dir,fig_fn))
+            # plt.close()
 
 
             # Create outfile:
@@ -209,7 +272,20 @@ def parse_trace(opts):
             file_grp.attrs['dims'] = (d1, d2, nslices, T/nslices)
             file_grp.attrs['mask_sourcefile'] = os.path.join(s2p_source_dir,'stat.npy')
             file_grp.attrs['s2p_cell_rois'] = cell_idxs
+            file_grp.attrs['roi_center_y'] = roi_center_y
+            file_grp.attrs['roi_center_x'] = roi_center_x
+            file_grp.attrs['roi_compact'] = roi_compact
+            file_grp.attrs['roi_skew'] = roi_skew
+            file_grp.attrs['roi_aspect_ratio'] = roi_aspect_ratio
+            file_grp.attrs['roi_radius'] = roi_radius
+            file_grp.attrs['roi_footprint'] = roi_footprint
+            file_grp.attrs['roi_npix'] = roi_npix
+
+
+
             file_grp.attrs['motion_offset'] = motion_trace
+            file_grp.attrs['max_motion_offset'] = np.max(motion_offset)
+            file_grp.attrs['min_motion_offset'] = np.min(motion_offset)
 
 
             # Get frame tstamps:
@@ -224,7 +300,7 @@ def parse_trace(opts):
             tset[...] = tstamps_indices 
 
             # Save RAW trace:
-            tset = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'raw']), s2p_raw.shape, s2p_raw.dtype)
+            tset = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'pixel_value', 'raw']), s2p_raw.shape, s2p_raw.dtype)
             tset[...] = s2p_raw
             curr_nframes, curr_nrois = s2p_raw.shape
             print("... saved tracemat: %s" % str(s2p_raw.shape))
@@ -232,13 +308,19 @@ def parse_trace(opts):
             tset.attrs['nrois'] = curr_nrois #tracemat.shape[1]
             tset.attrs['dims'] = dims
 
-            np_traces = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'neuropil']), s2p_np_traces.shape, s2p_np_traces.dtype)
+            np_traces = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'pixel_value', 'neuropil']), s2p_np_traces.shape, s2p_np_traces.dtype)
             np_traces[...] = s2p_np_traces
             print("... saved np tracemat: %s" % str(s2p_np_traces.shape))
 
-            np_corrected = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'np_subtracted']), s2p_cell_traces.shape, s2p_cell_traces.dtype)
+            np_corrected = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'pixel_value', 'cell']), s2p_cell_traces.shape, s2p_cell_traces.dtype)
             np_corrected.attrs['correction_factor'] = s2p_ops['neucoeff']
             np_corrected[...] = s2p_cell_traces
+            
+            dffset = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'global_df_f' ,'cell']), s2p_cell_df_f_trace.shape, s2p_cell_df_f_trace.dtype)
+            dffset[...] = s2p_cell_df_f_trace
+            
+            spks_set = file_grp.create_dataset('/'.join([curr_slice, 'traces', 'spks', 'cell']), binned_spks_trace.shape, binned_spks_trace.dtype)
+            spks_set[...] = binned_spks_trace
 
             offset_data = file_grp.create_dataset('/'.join([curr_slice, 'roi_global_baseline']), offset.shape, offset.dtype)
             offset_data[...] = offset
@@ -255,6 +337,8 @@ def parse_trace(opts):
 
     if not(last_idx == s2p_cell_trace_data.shape[1]):
         raise ValueError
+
+        
 
 def extract_options(options):
     parser = optparse.OptionParser()

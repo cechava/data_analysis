@@ -34,7 +34,7 @@ def filter_traces(opts):
     paradigm_dir = os.path.join(acquisition_dir, opts.combined_run, 'paradigm')
 
     #output directory for figure
-    fig_folder = '%s_%d'%(filter_crit,filter_thresh)
+    fig_folder = 'motion_%s_%s_%d'%(opts.motion_thresh,filter_crit,filter_thresh)
     fig_out_dir = os.path.join(traceid_dir,'figures','filtered_traces',fig_folder)
     if not os.path.exists(fig_out_dir):
         os.makedirs(fig_out_dir)
@@ -53,10 +53,7 @@ def filter_traces(opts):
         cell_rois = np.arange(nrois)
 
 
-    #consider only cell rois
-
-    pix_cell_array = pix_cell_array[:,:,cell_rois]
-    ntrials,ntpts,nrois = pix_cell_array.shape
+    
 
     pre_frames = file_grp.attrs['pre_frames']
     post_frames = file_grp.attrs['post_frames']
@@ -76,7 +73,7 @@ def filter_traces(opts):
     responses_dir = os.path.join(acquisition_dir, opts.combined_run,'responses',traceid)
     data_array_dir = os.path.join(responses_dir, 'data_arrays')
 
-    resp_array_fn = 'trial_response_array.hdf5'
+    resp_array_fn = 'trial_response_array_motion_%s.hdf5'%(opts.motion_thresh)
     resp_array_filepath = os.path.join(data_array_dir, resp_array_fn)
     resp_grp = h5py.File(resp_array_filepath, 'r')
 
@@ -86,6 +83,12 @@ def filter_traces(opts):
     #unpack
     filter_crit_matrix_trials = np.array(resp_grp['/'.join([curr_slice, 'responses' ,filter_crit])])
     filter_crit_matrix_trials = filter_crit_matrix_trials[:,:,cell_rois]
+
+
+    #consider only cell rois and trials that pass threshold
+    pix_cell_array = pix_cell_array[:,:,cell_rois]
+    ntrials,ntpts,nrois = pix_cell_array.shape
+
     resp_grp.close()
 
 
@@ -474,6 +477,7 @@ def extract_options(options):
     parser.add_option('-C', '--combined_run', action='store', dest='combined_run', default='', help='name of combo run') 
     parser.add_option('-f', '--filter_crit', action='store', dest='filter_crit', default='zscore', help='criterion to filter traces e.g.zscore') 
     parser.add_option('-t', '--filter_thresh', action='store', dest='filter_thresh', default='zscore', help='cutoff value of filter criterion') 
+    parser.add_option('-m', '--motion_thresh', action='store', dest='motion_thresh', default='5', help='threshold for motion to exclude trials') 
     (options, args) = parser.parse_args() 
 
     return options
