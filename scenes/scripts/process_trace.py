@@ -64,9 +64,9 @@ def plot_motion(opts):
     acquisition_dir = os.path.join(opts.rootdir, opts.animalid, opts.session, opts.acquisition)
 
 
-    fig_dir = os.path.join(opts.rootdir, opts.animalid, opts.session,'motion_figures')
-    if not os.path.isdir(fig_dir):
-        os.makedirs(fig_dir)
+    fig_base_dir = os.path.join(opts.rootdir, opts.animalid, opts.session,'registration_figures')
+    reg_features = ['offset','motion']
+    
 
     for run in opts.run_list:
         print(run)
@@ -119,9 +119,6 @@ def plot_motion(opts):
             trace_fn = os.path.join(trace_arrays_dir,trace_file)
 
             rawfile = h5py.File(trace_fn, 'r')
-            motion =  np.array(rawfile.attrs['motion_offset'])
-            min_motion =  int(rawfile.attrs['min_motion_offset'])
-            max_motion =  int(rawfile.attrs['max_motion_offset'])
 
             stim_on_frames = []
 
@@ -143,26 +140,39 @@ def plot_motion(opts):
 
             palette=["#4c72b0","#c44e52","#55a868"]
 
-            fig=plt.figure(figsize = (30, 5))
+            for idx,reg in enumerate(reg_features):
+                reg_metric =  np.array(rawfile.attrs[reg])
+                min_reg_metric =  int(rawfile.attrs['min_%s'%reg])
+                max_reg_metric =  int(rawfile.attrs['max_%s'%reg])
+
+                fig_dir = os.path.join(fig_base_dir,reg)
+                if not os.path.isdir(fig_dir):
+                    os.makedirs(fig_dir)
+
+                fig=plt.figure(figsize = (30, 5))
 
 
-            plt.plot(all_frames_tsecs,motion)
-            plt.axhline(y = 5, xmin = 0, xmax = 1, linewidth=1, color='k',linestyle ='--')
-            plt.axhline(y = 0, xmin = 0, xmax = 1, linewidth=1, color='k',linestyle ='-')
-            axes = plt.gca()
-            axes.set_ylim([min_motion,max_motion])
-            ymin, ymax = axes.get_ylim()
-            for fidx,f in enumerate(all_frames_tsecs[stim_on_frames]):
-                axes.add_patch(patches.Rectangle((f, ymin), 1, ymax-ymin, linewidth=0, fill=True, color=palette[trial_cond[fidx+(file_idx*trials_per_file)]], alpha=0.4));
-                axes.text(f,ymax,'%i'%(trial_img[fidx+(file_idx*trials_per_file)]),fontsize=12);
+                plt.plot(all_frames_tsecs,reg_metric)
+                if reg == 'offset':
+                    plt.axhline(y = 10, xmin = 0, xmax = 1, linewidth=1, color='k',linestyle ='--')
+                else:
+                    plt.axhline(y = 1, xmin = 0, xmax = 1, linewidth=1, color='k',linestyle ='--')
+               
+                plt.axhline(y = 0, xmin = 0, xmax = 1, linewidth=1, color='k',linestyle ='-')
+                axes = plt.gca()
+                axes.set_ylim([min_reg_metric,max_reg_metric])
+                ymin, ymax = axes.get_ylim()
+                for fidx,f in enumerate(all_frames_tsecs[stim_on_frames]):
+                    axes.add_patch(patches.Rectangle((f, ymin), 1, ymax-ymin, linewidth=0, fill=True, color=palette[trial_cond[fidx+(file_idx*trials_per_file)]], alpha=0.4));
+                    axes.text(f,ymax,'%i'%(trial_img[fidx+(file_idx*trials_per_file)]),fontsize=12);
 
-            plt.xlabel('Time (secs)',fontsize = 14)
-            plt.ylabel('Df/F',fontsize = 14)
-            fig.suptitle('Motion')
-            
-            fig_fn = 'motion_timecourse_%s_file%03d.png'%(run,file_idx+1)
-            plt.savefig(os.path.join(fig_dir,fig_fn))
-            plt.close()
+                plt.xlabel('Time (secs)',fontsize = 14)
+                plt.ylabel(reg,fontsize = 14)
+                fig.suptitle(reg)
+                
+                fig_fn = '%s_timecourse_%s_file%03d.png'%(reg,run,file_idx+1)
+                plt.savefig(os.path.join(fig_dir,fig_fn))
+                plt.close()
 
 def parse_trials(opts):
     #hard-coding some parameters
@@ -259,7 +269,8 @@ def parse_trials(opts):
                     trace_fn = os.path.join(trace_arrays_dir,trace_file)
 
                     rawfile = h5py.File(trace_fn, 'r')
-                    motion_offset = np.array(rawfile.attrs['motion_offset'])
+                    motion = np.array(rawfile.attrs['motion'])
+                    offset = np.array(rawfile.attrs['offset'])
 
 
                     raw_df = rawfile[curr_slice]['traces']['pixel_value']['raw'][:]
@@ -278,7 +289,8 @@ def parse_trials(opts):
 
                 rawfile = h5py.File(trace_fn, 'r')
                 
-                motion_offset = np.array(rawfile.attrs['motion_offset'])
+                motion = np.array(rawfile.attrs['motion'])
+                offset = np.array(rawfile.attrs['offset'])
                 raw_df = rawfile[curr_slice]['traces']['pixel_value']['raw'][:]
                 sub_df = rawfile[curr_slice]['traces']['pixel_value']['cell'][:]
                 np_df = rawfile[curr_slice]['traces']['pixel_value']['neuropil'][:]
@@ -324,8 +336,9 @@ def parse_trials(opts):
                 parsed_traces_sub[:] = np.nan
                 parsed_traces_np = np.empty((ntrials,ntpts,nrois))
                 parsed_traces_np[:] = np.nan
-                parsed_motion = np.empty((ntrials,ntpts))
-                parsed_motion[:] = np.nan
+                parsed_offset = np.empty((ntrials,ntpts))
+                parsed_offset[:] = np.nan
+                parsed_motion = np.copy(parsed_offset)
 
                 parsed_traces_df_f = np.empty((ntrials,ntpts,nrois))
                 parsed_traces_df_f[:] = np.nan
@@ -356,7 +369,8 @@ def parse_trials(opts):
             parsed_traces_spks[trial_idx,0:trial_frames,:]=trial_spks
 
 
-            parsed_motion[trial_idx,0:trial_frames] = motion_offset[idx0:idx1]
+            parsed_offset[trial_idx,0:trial_frames] = offset[idx0:idx1]
+            parsed_motion[trial_idx,0:trial_frames] = motion[idx0:idx1]
             trial_fid[trial_idx] = fid
 
         #get parsed trace time stamps
@@ -366,6 +380,9 @@ def parse_trials(opts):
         curr_tstamps = curr_tstamps - iti_pre
 
         #save arrays to file
+        offset = file_grp.create_dataset('trial_offset', parsed_offset.shape, parsed_offset.dtype)
+        offset[...] = parsed_offset
+
         motion = file_grp.create_dataset('trial_motion', parsed_motion.shape, parsed_motion.dtype)
         motion[...] = parsed_motion
 
@@ -508,7 +525,8 @@ def combine_trials(opts):
         trial_fid = np.array(file_grp['Slice01']['trial_fid'])
         trial_run = np.ones(trial_fid.shape)*(run_idx+1)
         mean_pix_fid = np.array(file_grp['Slice01']['mean_pix_fid'])
-        #get motion
+        #get offset motion
+        offset_run = np.array(file_grp['trial_offset'])
         motion_run = np.array(file_grp['trial_motion'])
         #get raw pixel value arrays
         pix_raw_run = np.array(file_grp[curr_slice]['traces']['pixel_value']['raw'])
@@ -563,6 +581,7 @@ def combine_trials(opts):
             trial_fid_combo = trial_fid
             trial_run_combo = trial_run
             mean_pix_fid_combo = mean_pix_fid
+            offset_run_combo = offset_run
             motion_run_combo = motion_run
         else:
             #for now, lop off timepoints if doesn't match what we already have, if volumerate fast enough. this is negligible
@@ -573,6 +592,7 @@ def combine_trials(opts):
                 pix_np_run = pix_np_run[:,:-extra_frames,:]
                 df_f_cell_run = df_f_cell_run[:,:-extra_frames,:]
                 spks_cell_run = spks_cell_run[:,:-extra_frames,:]
+                offset_run = offset_run[:,:-extra_frames]
                 motion_run = motion_run[:,:-extra_frames]
             
             pix_raw_combo = np.vstack((pix_raw_combo,pix_raw_run))
@@ -581,6 +601,7 @@ def combine_trials(opts):
             df_f_cell_combo = np.vstack((df_f_cell_combo,df_f_cell_run))
             spks_cell_combo = np.vstack((spks_cell_combo,spks_cell_run))
 
+            offset_run_combo = np.vstack((offset_run_combo,offset_run))
             motion_run_combo = np.vstack((motion_run_combo,motion_run))
             
             trial_fid_combo = np.hstack((trial_fid_combo,trial_fid))
@@ -591,6 +612,9 @@ def combine_trials(opts):
 
     #save combined traces to file
     #save arrays to file
+
+    offset = combined_grp.create_dataset('offset', offset_run_combo.shape, offset_run_combo.dtype)
+    offset[...] = offset_run_combo
 
     motion = combined_grp.create_dataset('motion', motion_run_combo.shape, motion_run_combo.dtype)
     motion[...] = motion_run_combo
@@ -701,6 +725,7 @@ def evaluate_trials(opts):
     file_grp = h5py.File(parsedtraces_filepath, 'r')
 
     #get motion info
+    offset = np.array(file_grp['offset'])
     motion = np.array(file_grp['motion'])
 
 
@@ -881,6 +906,10 @@ def evaluate_trials(opts):
     #save arrays to file
 
     #save motion
+
+    offset_set = data_grp.create_dataset('offset', offset.shape, offset.dtype)
+    offset_set[...] = offset
+
     motion_set = data_grp.create_dataset('motion', motion.shape, motion.dtype)
     motion_set[...] = motion
 
@@ -972,10 +1001,10 @@ def evaluate_trials(opts):
 def get_trial_responses(opts):
     traceid = '%s_s2p'%(opts.traceid)
 
-    if opts.motion_thresh is not None:
-        motion_thresh = int(opts.motion_thresh)
-    else:
-        motion_thresh = 'None'
+    # if opts.motion_thresh is not None:
+    #     motion_thresh = int(opts.motion_thresh)
+    # else:
+    #     motion_thresh = 'None'
         
     #% Set up paths:    
     acquisition_dir = os.path.join(opts.rootdir, opts.animalid, opts.session, opts.acquisition)
@@ -1042,7 +1071,8 @@ def get_trial_responses(opts):
 
 
 
-    #get max motion per trial
+    #get max offset and motion per trial
+    trial_max_offset = np.nanmax(np.abs(np.array(data_grp['offset'])),1)
     trial_max_motion = np.nanmax(np.abs(np.array(data_grp['motion'])),1)
 
     #save arrays
@@ -1062,7 +1092,7 @@ def get_trial_responses(opts):
     resp_grp['trial_cond'] = np.array(data_grp['trial_cond'])
     resp_grp['trial_img'] = np.array(data_grp['trial_img'])
 
-
+    resp_grp['trial_max_offset'] = trial_max_offset
     resp_grp['trial_max_motion'] = trial_max_motion
 
     resp_grp['/'.join([curr_slice,'mean_response','df'])] = trial_mean_df

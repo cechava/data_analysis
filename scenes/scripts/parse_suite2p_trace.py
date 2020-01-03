@@ -101,9 +101,12 @@ def parse_trace(opts):
     s2p_spks_data = np.load(s2p_spks_fn)
 
     #get offset
-    motion_offset = np.sqrt(np.power(s2p_ops['xoff'],2)+np.power(s2p_ops['yoff'],2))
-    # motion_offset = motion_offset - motion_offset[0]
+    reg_offset = np.sqrt(np.power(s2p_ops['xoff'],2)+np.power(s2p_ops['yoff'],2))
 
+    #get motion
+    kernel = np.array([1,1,1,1,1,-1,-1,-1,-1,-1])/float(5)
+    offset_pad = np.pad(reg_offset, ((0),(kernel.size-1)), 'edge')
+    reg_motion = np.abs(np.convolve(offset_pad,kernel,'valid'))
 
     #correct for neuropil
     corrected_traces = s2p_raw_trace_data - (s2p_ops['neucoeff']*s2p_np_trace_data)
@@ -243,19 +246,9 @@ def parse_trace(opts):
             s2p_cell_df_f_trace = np.transpose(s2p_cell_df_f_data[:,idx0:idx1])
             binned_spks_trace =  np.transpose(binned_spks_data[:,idx0:idx1])
 
-            motion_trace = motion_offset[idx0:idx1]
-            # #plot motion
-            # fig=plt.figure(figsize = (20, 5))
-            # plt.plot(frames_tsec,motion_trace)
-            # plt.xlabel('Time (secs)',fontsize=20)
-            # plt.ylabel('Offset',fontsize=20)
+            motion_trace = reg_motion[idx0:idx1]
+            offset_trace = reg_offset[idx0:idx1]
 
-            # ax = plt.gca()
-            # ax.set_ylim([np.min(motion_offset),np.max(motion_offset)])
-
-            # fig_fn = '%s_%s_%s_%s_absolute_motion.png'%(opts.animalid,opts.session,indie_run,curr_file)
-            # plt.savefig(os.path.join(fig_dir,fig_fn))
-            # plt.close()
 
 
             # Create outfile:
@@ -281,11 +274,15 @@ def parse_trace(opts):
             file_grp.attrs['roi_footprint'] = roi_footprint
             file_grp.attrs['roi_npix'] = roi_npix
 
+            file_grp.attrs['offset'] = offset_trace
+            file_grp.attrs['max_offset'] = np.max(reg_offset)
+            file_grp.attrs['min_offset'] = np.min(reg_offset)
+
+            file_grp.attrs['motion'] = motion_trace
+            file_grp.attrs['max_motion'] = np.max(reg_motion)
+            file_grp.attrs['min_motion'] = np.min(reg_motion)
 
 
-            file_grp.attrs['motion_offset'] = motion_trace
-            file_grp.attrs['max_motion_offset'] = np.max(motion_offset)
-            file_grp.attrs['min_motion_offset'] = np.min(motion_offset)
 
 
             # Get frame tstamps:
@@ -325,8 +322,7 @@ def parse_trace(opts):
             offset_data = file_grp.create_dataset('/'.join([curr_slice, 'roi_global_baseline']), offset.shape, offset.dtype)
             offset_data[...] = offset
 
-            # motion_data = file_grp.create_dataset('/'.join([curr_slice, 'motion_offset']), motion_trace.shape, motion_trace.dtype)
-            # motion_data[...] = motion_trace
+
 
             if file_grp is not None:
                 file_grp.close()
